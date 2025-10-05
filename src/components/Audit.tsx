@@ -1,20 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  Shield, 
-  Search, 
-  Filter,
-  Calendar,
-  User,
-  Activity,
-  LogIn,
-  LogOut,
-  Plus,
-  Edit,
-  Trash2,
-  ArrowUpDown,
-  Download,
-  FileSpreadsheet
-} from 'lucide-react';
+import { Shield, Search, Filter, Calendar, User, Activity, LogIn, LogOut, Plus, CreditCard as Edit, Trash2, ArrowUpDown, Download, FileSpreadsheet } from 'lucide-react';
 import { AuditLog } from '../types';
 import { supabase } from '../db/supabase';
 import { useAuth } from '../context/AuthContext';
