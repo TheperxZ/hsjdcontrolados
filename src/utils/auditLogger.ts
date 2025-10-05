@@ -1,4 +1,4 @@
-import { db } from '../db';
+import { supabase } from '../db/supabase';
 import { AuditLog } from '../types';
 
 export const logAuditEvent = async (
@@ -9,14 +9,15 @@ export const logAuditEvent = async (
   type: AuditLog['type']
 ) => {
   try {
-    await db.auditoria.add({
-      userId,
-      userName,
-      action,
-      details,
-      timestamp: new Date().toISOString(),
-      type
-    });
+    await supabase
+      .from('auditoria')
+      .insert({
+        user_id: userId,
+        user_name: userName,
+        action,
+        details,
+        type
+      });
   } catch (error) {
     console.error('Error logging audit event:', error);
   }

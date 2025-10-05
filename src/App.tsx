@@ -11,7 +11,7 @@ import { WarehouseManagement } from './components/WarehouseManagement';
 import { Inventory } from './components/Inventory';
 import { Audit } from './components/Audit';
 import { Medicine, Movement, User, Warehouse } from './types';
-import { db } from './db';
+import { supabase } from './db/supabase';
 import { Package } from 'lucide-react';
 import { Toaster } from 'react-hot-toast';
 import { useInactivityTimer } from './hooks/useInactivityTimer';
@@ -27,53 +27,77 @@ const AppContent: React.FC = () => {
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Initialize inactivity timer
   useInactivityTimer();
 
-  // Reset to dashboard on login
   useEffect(() => {
     if (isAuthenticated) {
       setCurrentPage('dashboard');
     }
   }, [isAuthenticated]);
 
-  // Load data from IndexedDB
   useEffect(() => {
     const loadData = async () => {
       try {
         setIsLoading(true);
-        
-        // Load medicines
-        const dbMedicines = await db.productos.toArray();
-        const medicinesWithStringId = dbMedicines.map(m => ({
-          ...m,
-          id: m.id!.toString()
-        }));
-        setMedicines(medicinesWithStringId);
 
-        // Load movements
-        const dbMovements = await db.movimientos.toArray();
-        const movementsWithStringId = dbMovements.map(m => ({
-          ...m,
-          id: m.id!.toString()
-        }));
-        setMovements(movementsWithStringId);
+        const [medicinesRes, movementsRes, usersRes, warehousesRes] = await Promise.all([
+          supabase.from('productos').select('*').order('name'),
+          supabase.from('movimientos').select('*').order('date', { ascending: false }),
+          supabase.from('usuarios').select('*').order('username'),
+          supabase.from('bodegas').select('*').order('name')
+        ]);
 
-        // Load users
-        const dbUsers = await db.usuarios.toArray();
-        const usersWithStringId = dbUsers.map(u => ({
-          ...u,
-          id: u.id!.toString()
-        }));
-        setUsers(usersWithStringId);
+        if (medicinesRes.data) {
+          setMedicines(medicinesRes.data.map(m => ({
+            id: m.id,
+            name: m.name,
+            currentStock: m.current_stock,
+            isActive: m.is_active,
+            lowStockThreshold: m.low_stock_threshold,
+            warehouseStock: m.warehouse_stock
+          })));
+        }
 
-        // Load warehouses
-        const dbWarehouses = await db.bodegas.toArray();
-        const warehousesWithStringId = dbWarehouses.map(w => ({
-          ...w,
-          id: w.id!.toString()
-        }));
-        setWarehouses(warehousesWithStringId);
+        if (movementsRes.data) {
+          setMovements(movementsRes.data.map(m => ({
+            id: m.id,
+            medicineId: m.medicine_id,
+            medicineName: m.medicine_name,
+            warehouseId: m.warehouse_id,
+            warehouseName: m.warehouse_name,
+            type: m.type,
+            quantity: m.quantity,
+            date: m.date,
+            userId: m.user_id,
+            userName: m.user_name,
+            justification: m.justification,
+            invoiceNumber: m.invoice_number,
+            patientName: m.patient_name,
+            patientDocument: m.patient_document,
+            prescriptionNumber: m.prescription_number
+          })));
+        }
+
+        if (usersRes.data) {
+          setUsers(usersRes.data.map(u => ({
+            id: u.id,
+            username: u.username,
+            email: u.email,
+            role: u.role,
+            isActive: u.is_active,
+            createdAt: u.created_at
+          })));
+        }
+
+        if (warehousesRes.data) {
+          setWarehouses(warehousesRes.data.map(w => ({
+            id: w.id,
+            name: w.name,
+            description: w.description,
+            isActive: w.is_active,
+            createdAt: w.created_at
+          })));
+        }
 
       } catch (error) {
         console.error('Error loading data:', error);
@@ -87,25 +111,43 @@ const AppContent: React.FC = () => {
     }
   }, [isAuthenticated]);
 
-  // Medicine handlers
   const handleAddMedicine = async (medicine: Omit<Medicine, 'id'>) => {
     try {
-      const id = await db.productos.add(medicine);
-      const newMedicine: Medicine = {
-        ...medicine,
-        id: id.toString()
-      };
-      setMedicines(prev => [...prev, newMedicine]);
-      
-      if (user) {
-        await logAuditEvent(
-          user.id,
-          user.username,
-          'Creación de medicamento',
-          `Medicamento creado: ${medicine.name}`,
-          'create'
-        );
-        showNotification.success('Medicamento creado exitosamente');
+      const { data, error } = await supabase
+        .from('productos')
+        .insert({
+          name: medicine.name,
+          current_stock: medicine.currentStock,
+          is_active: medicine.isActive,
+          low_stock_threshold: medicine.lowStockThreshold,
+          warehouse_stock: medicine.warehouseStock
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      if (data) {
+        const newMedicine: Medicine = {
+          id: data.id,
+          name: data.name,
+          currentStock: data.current_stock,
+          isActive: data.is_active,
+          lowStockThreshold: data.low_stock_threshold,
+          warehouseStock: data.warehouse_stock
+        };
+        setMedicines(prev => [...prev, newMedicine]);
+
+        if (user) {
+          await logAuditEvent(
+            user.id,
+            user.username,
+            'Creación de medicamento',
+            `Medicamento creado: ${medicine.name}`,
+            'create'
+          );
+          showNotification.success('Medicamento creado exitosamente');
+        }
       }
     } catch (error) {
       console.error('Error adding medicine:', error);
@@ -115,9 +157,22 @@ const AppContent: React.FC = () => {
 
   const handleUpdateMedicine = async (id: string, updates: Partial<Medicine>) => {
     try {
-      await db.productos.update(parseInt(id), updates);
+      const dbUpdates: any = {};
+      if (updates.name !== undefined) dbUpdates.name = updates.name;
+      if (updates.currentStock !== undefined) dbUpdates.current_stock = updates.currentStock;
+      if (updates.isActive !== undefined) dbUpdates.is_active = updates.isActive;
+      if (updates.lowStockThreshold !== undefined) dbUpdates.low_stock_threshold = updates.lowStockThreshold;
+      if (updates.warehouseStock !== undefined) dbUpdates.warehouse_stock = updates.warehouseStock;
+
+      const { error } = await supabase
+        .from('productos')
+        .update(dbUpdates)
+        .eq('id', id);
+
+      if (error) throw error;
+
       setMedicines(prev => prev.map(m => m.id === id ? { ...m, ...updates } : m));
-      
+
       if (user) {
         const medicine = medicines.find(m => m.id === id);
         await logAuditEvent(
@@ -138,9 +193,16 @@ const AppContent: React.FC = () => {
   const handleDeleteMedicine = async (id: string) => {
     try {
       const medicine = medicines.find(m => m.id === id);
-      await db.productos.delete(parseInt(id));
+
+      const { error } = await supabase
+        .from('productos')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+
       setMedicines(prev => prev.filter(m => m.id !== id));
-      
+
       if (user && medicine) {
         await logAuditEvent(
           user.id,
@@ -157,25 +219,61 @@ const AppContent: React.FC = () => {
     }
   };
 
-  // Movement handlers
   const handleAddMovement = async (movement: Omit<Movement, 'id'>) => {
     try {
-      const id = await db.movimientos.add(movement);
-      const newMovement: Movement = {
-        ...movement,
-        id: id.toString()
-      };
-      setMovements(prev => [...prev, newMovement]);
-      
-      if (user) {
-        await logAuditEvent(
-          user.id,
-          user.username,
-          `Movimiento de ${movement.type === 'entry' ? 'ingreso' : 'salida'}`,
-          `${movement.type === 'entry' ? 'Ingreso' : 'Salida'} de ${movement.quantity} unidades de ${movement.medicineName} en ${movement.warehouseName}`,
-          'movement'
-        );
-        showNotification.success(`Movimiento de ${movement.type === 'entry' ? 'ingreso' : 'salida'} registrado exitosamente`);
+      const { data, error } = await supabase
+        .from('movimientos')
+        .insert({
+          medicine_id: movement.medicineId,
+          medicine_name: movement.medicineName,
+          warehouse_id: movement.warehouseId,
+          warehouse_name: movement.warehouseName,
+          type: movement.type,
+          quantity: movement.quantity,
+          date: movement.date,
+          user_id: movement.userId,
+          user_name: movement.userName,
+          justification: movement.justification,
+          invoice_number: movement.invoiceNumber,
+          patient_name: movement.patientName,
+          patient_document: movement.patientDocument,
+          prescription_number: movement.prescriptionNumber
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      if (data) {
+        const newMovement: Movement = {
+          id: data.id,
+          medicineId: data.medicine_id,
+          medicineName: data.medicine_name,
+          warehouseId: data.warehouse_id,
+          warehouseName: data.warehouse_name,
+          type: data.type,
+          quantity: data.quantity,
+          date: data.date,
+          userId: data.user_id,
+          userName: data.user_name,
+          justification: data.justification,
+          invoiceNumber: data.invoice_number,
+          patientName: data.patient_name,
+          patientDocument: data.patient_document,
+          prescriptionNumber: data.prescription_number
+        };
+        setMovements(prev => [newMovement, ...prev]);
+
+        if (user) {
+          await logAuditEvent(
+            user.id,
+            user.username,
+            `Movimiento de ${movement.type === 'entry' ? 'ingreso' : 'salida'}`,
+            `${movement.type === 'entry' ? 'Ingreso' : 'Salida'} de ${movement.quantity} unidades de ${movement.medicineName} en ${movement.warehouseName}`,
+            'movement'
+          );
+          showNotification.success(`Movimiento de ${movement.type === 'entry' ? 'ingreso' : 'salida'} registrado exitosamente`);
+        }
       }
     } catch (error) {
       console.error('Error adding movement:', error);
@@ -189,29 +287,56 @@ const AppContent: React.FC = () => {
       if (medicine) {
         const updatedWarehouseStock = { ...medicine.warehouseStock, [warehouseId]: newStock };
         const totalStock = Object.values(updatedWarehouseStock).reduce((sum, stock) => sum + stock, 0);
-        
-        const updates = { 
-          warehouseStock: updatedWarehouseStock,
-          currentStock: totalStock
-        };
-        
-        await db.productos.update(parseInt(medicineId), updates);
-        setMedicines(prev => prev.map(m => m.id === medicineId ? { ...m, ...updates } : m));
+
+        const { error } = await supabase
+          .from('productos')
+          .update({
+            warehouse_stock: updatedWarehouseStock,
+            current_stock: totalStock
+          })
+          .eq('id', medicineId);
+
+        if (error) throw error;
+
+        setMedicines(prev => prev.map(m =>
+          m.id === medicineId
+            ? { ...m, warehouseStock: updatedWarehouseStock, currentStock: totalStock }
+            : m
+        ));
       }
     } catch (error) {
       console.error('Error updating medicine stock:', error);
     }
   };
 
-  // User handlers
-  const handleAddUser = async (user: Omit<User, 'id'>) => {
+  const handleAddUser = async (newUser: Omit<User, 'id'>) => {
     try {
-      const id = await db.usuarios.add(user);
-      const newUser: User = {
-        ...user,
-        id: id.toString()
-      };
-      setUsers(prev => [...prev, newUser]);
+      const { data, error } = await supabase
+        .from('usuarios')
+        .insert({
+          username: newUser.username,
+          email: newUser.email,
+          password: newUser.password,
+          role: newUser.role,
+          is_active: newUser.isActive,
+          created_at: newUser.createdAt
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      if (data) {
+        const user: User = {
+          id: data.id,
+          username: data.username,
+          email: data.email,
+          role: data.role,
+          isActive: data.is_active,
+          createdAt: data.created_at
+        };
+        setUsers(prev => [...prev, user]);
+      }
     } catch (error) {
       console.error('Error adding user:', error);
     }
@@ -219,7 +344,19 @@ const AppContent: React.FC = () => {
 
   const handleUpdateUser = async (id: string, updates: Partial<User>) => {
     try {
-      await db.usuarios.update(parseInt(id), updates);
+      const dbUpdates: any = {};
+      if (updates.username !== undefined) dbUpdates.username = updates.username;
+      if (updates.email !== undefined) dbUpdates.email = updates.email;
+      if (updates.role !== undefined) dbUpdates.role = updates.role;
+      if (updates.isActive !== undefined) dbUpdates.is_active = updates.isActive;
+
+      const { error } = await supabase
+        .from('usuarios')
+        .update(dbUpdates)
+        .eq('id', id);
+
+      if (error) throw error;
+
       setUsers(prev => prev.map(u => u.id === id ? { ...u, ...updates } : u));
     } catch (error) {
       console.error('Error updating user:', error);
@@ -228,22 +365,44 @@ const AppContent: React.FC = () => {
 
   const handleDeleteUser = async (id: string) => {
     try {
-      await db.usuarios.delete(parseInt(id));
+      const { error } = await supabase
+        .from('usuarios')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+
       setUsers(prev => prev.filter(u => u.id !== id));
     } catch (error) {
       console.error('Error deleting user:', error);
     }
   };
 
-  // Warehouse handlers
   const handleAddWarehouse = async (warehouse: Omit<Warehouse, 'id'>) => {
     try {
-      const id = await db.bodegas.add(warehouse);
-      const newWarehouse: Warehouse = {
-        ...warehouse,
-        id: id.toString()
-      };
-      setWarehouses(prev => [...prev, newWarehouse]);
+      const { data, error } = await supabase
+        .from('bodegas')
+        .insert({
+          name: warehouse.name,
+          description: warehouse.description,
+          is_active: warehouse.isActive,
+          created_at: warehouse.createdAt
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      if (data) {
+        const newWarehouse: Warehouse = {
+          id: data.id,
+          name: data.name,
+          description: data.description,
+          isActive: data.is_active,
+          createdAt: data.created_at
+        };
+        setWarehouses(prev => [...prev, newWarehouse]);
+      }
     } catch (error) {
       console.error('Error adding warehouse:', error);
     }
@@ -251,7 +410,18 @@ const AppContent: React.FC = () => {
 
   const handleUpdateWarehouse = async (id: string, updates: Partial<Warehouse>) => {
     try {
-      await db.bodegas.update(parseInt(id), updates);
+      const dbUpdates: any = {};
+      if (updates.name !== undefined) dbUpdates.name = updates.name;
+      if (updates.description !== undefined) dbUpdates.description = updates.description;
+      if (updates.isActive !== undefined) dbUpdates.is_active = updates.isActive;
+
+      const { error } = await supabase
+        .from('bodegas')
+        .update(dbUpdates)
+        .eq('id', id);
+
+      if (error) throw error;
+
       setWarehouses(prev => prev.map(w => w.id === id ? { ...w, ...updates } : w));
     } catch (error) {
       console.error('Error updating warehouse:', error);
@@ -260,7 +430,13 @@ const AppContent: React.FC = () => {
 
   const handleDeleteWarehouse = async (id: string) => {
     try {
-      await db.bodegas.delete(parseInt(id));
+      const { error } = await supabase
+        .from('bodegas')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+
       setWarehouses(prev => prev.filter(w => w.id !== id));
     } catch (error) {
       console.error('Error deleting warehouse:', error);
@@ -287,7 +463,6 @@ const AppContent: React.FC = () => {
       case 'dashboard':
         return <Dashboard medicines={medicines} movements={movements} warehouses={warehouses} />;
       case 'medicines':
-        // Only allow regente and administrador to access medicines
         return (user?.role === 'regente' || user?.role === 'administrador') ? (
           <MedicineManagement
             medicines={medicines}

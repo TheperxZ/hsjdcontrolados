@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { User, AuthContextType } from '../types';
-import { db } from '../db';
+import { supabase } from '../db/supabase';
 import { logAuditEvent } from '../utils/auditLogger';
 import { showNotification } from '../utils/notifications';
 
@@ -13,14 +13,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     const initAuth = async () => {
       try {
-        // Check if there's a saved session
         const savedUserId = sessionStorage.getItem('currentUserId');
         if (savedUserId) {
-          const savedUser = await db.usuarios.get(parseInt(savedUserId));
-          if (savedUser && savedUser.isActive) {
+          const { data, error } = await supabase
+            .from('usuarios')
+            .select('*')
+            .eq('id', savedUserId)
+            .eq('is_active', true)
+            .maybeSingle();
+
+          if (!error && data) {
             setUser({
-              ...savedUser,
-              id: savedUser.id!.toString()
+              id: data.id,
+              username: data.username,
+              email: data.email,
+              role: data.role,
+              isActive: data.is_active,
+              createdAt: data.created_at
             });
           } else {
             sessionStorage.removeItem('currentUserId');
@@ -39,28 +48,35 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const login = async (username: string, password: string): Promise<boolean> => {
     try {
-      const foundUser = await db.usuarios
-        .where({ username, password })
-        .and(user => user.isActive === true)
-        .first();
-      
-      if (foundUser) {
-        const userWithStringId = {
-          ...foundUser,
-          id: foundUser.id!.toString()
+      const { data, error } = await supabase
+        .from('usuarios')
+        .select('*')
+        .eq('username', username)
+        .eq('password', password)
+        .eq('is_active', true)
+        .maybeSingle();
+
+      if (!error && data) {
+        const userWithMappedFields: User = {
+          id: data.id,
+          username: data.username,
+          email: data.email,
+          role: data.role,
+          isActive: data.is_active,
+          createdAt: data.created_at
         };
-        setUser(userWithStringId);
-        sessionStorage.setItem('currentUserId', foundUser.id!.toString());
-        
-        // Log successful login
+
+        setUser(userWithMappedFields);
+        sessionStorage.setItem('currentUserId', data.id);
+
         await logAuditEvent(
-          userWithStringId.id,
-          userWithStringId.username,
+          userWithMappedFields.id,
+          userWithMappedFields.username,
           'Inicio de sesión',
-          `Usuario ${userWithStringId.username} inició sesión exitosamente`,
+          `Usuario ${userWithMappedFields.username} inició sesión exitosamente`,
           'login'
         );
-        
+
         showNotification.success('Inicio de sesión exitoso');
         return true;
       }
@@ -73,7 +89,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = async () => {
     if (user) {
-      // Log logout
       await logAuditEvent(
         user.id,
         user.username,
@@ -82,7 +97,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         'logout'
       );
     }
-    
+
     setUser(null);
     sessionStorage.removeItem('currentUserId');
   };

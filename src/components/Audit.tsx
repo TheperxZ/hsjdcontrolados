@@ -16,7 +16,7 @@ import {
   FileSpreadsheet
 } from 'lucide-react';
 import { AuditLog } from '../types';
-import { db } from '../db';
+import { supabase } from '../db/supabase';
 import { useAuth } from '../context/AuthContext';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
@@ -37,12 +37,22 @@ export const Audit: React.FC = () => {
   const loadAuditLogs = async () => {
     try {
       setIsLoading(true);
-      const logs = await db.auditoria.orderBy('timestamp').reverse().toArray();
-      const logsWithStringId = logs.map(log => ({
-        ...log,
-        id: log.id!.toString()
-      }));
-      setAuditLogs(logsWithStringId);
+      const { data, error } = await supabase
+        .from('auditoria')
+        .select('*')
+        .order('timestamp', { ascending: false });
+
+      if (!error && data) {
+        setAuditLogs(data.map(log => ({
+          id: log.id,
+          userId: log.user_id,
+          userName: log.user_name,
+          action: log.action,
+          details: log.details,
+          timestamp: log.timestamp,
+          type: log.type
+        })));
+      }
     } catch (error) {
       console.error('Error loading audit logs:', error);
     } finally {
