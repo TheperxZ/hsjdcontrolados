@@ -1,2 +1,1 @@
-# hsjdcontrolados
-libro medicamentosde control especial
+librohsjdcontrolados
